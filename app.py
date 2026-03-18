@@ -69,7 +69,9 @@ def create_app():
         offset = (page - 1) * per_page
         board_filter = request.args.get("board", "")
         country_filter = request.args.get("country", "")
-        min_score = float(request.args.get("min_score", 0))
+        min_score_raw = float(request.args.get("min_score", 0))
+        # Accept both 0-1 range and 0-100 percentage
+        min_score = min_score_raw / 100.0 if min_score_raw > 1 else min_score_raw
         search = request.args.get("q", "")
         sort = request.args.get("sort", "score")  # score, date, company
 

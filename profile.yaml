@@ -156,10 +156,10 @@ preferred_locations:
 
 remote_preferred: true
 
-# --- Scoring Weights (must sum to ~1.0, recency adds +0.10 on top) ---
+# --- Scoring Weights (must sum to ~0.9, recency adds +0.10 on top) ---
 weights:
-  skills: 0.35
-  title: 0.25
-  keywords: 0.15
+  skills: 0.25
+  title: 0.20
+  semantic: 0.30      # LLM embedding similarity (replaces old keyword matching)
   location: 0.10
-  experience: 0.15
+  experience: 0.05    # life-story TF-IDF (lightweight supplement)

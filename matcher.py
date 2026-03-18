@@ -1,4 +1,4 @@
-"""Job matching engine — scores jobs against a user profile."""
+"""Job matching engine — scores jobs against a user profile using semantic embeddings."""
 
 import re
 import math
@@ -9,9 +9,25 @@ from pathlib import Path
 
 from models import Job
 
-LIFE_STORY_PATH = Path(__file__).parent.parent / "A_Customised_CurVe_CV__1_" / "life-story.md"
+LIFE_STORY_PATH = Path(__file__).parent.parent / "CV" / "life-story.md"
 
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded sentence transformer model
+_model = None
+_model_name = "all-MiniLM-L6-v2"
+
+
+def _get_model():
+    """Lazy-load the sentence transformer model (first call takes a few seconds)."""
+    global _model
+    if _model is None:
+        logger.info(f"Loading embedding model '{_model_name}'...")
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer(_model_name)
+        logger.info("Embedding model loaded.")
+    return _model
+
 
 # Keywords that indicate AI/ML/CV relevance — a job must contain at least one
 AI_KEYWORDS = {
@@ -84,45 +100,8 @@ def load_life_story() -> str:
     return ""
 
 
-def extract_life_story_signals(text: str) -> dict:
-    """Extract extra matching signals from the life-story markdown."""
-    if not text:
-        return {"technologies": set(), "domains": set(), "companies": set(), "full_tokens": []}
-
-    # Extract technology keywords from "Technologies:" lines and code blocks
-    tech_pattern = re.compile(r"(?:Technologies(?: used)?[:\s]*|Technologies:)(.*?)(?:\n|$)", re.IGNORECASE)
-    techs = set()
-    for m in tech_pattern.finditer(text):
-        for t in re.split(r"[,;|.]", m.group(1)):
-            t = t.strip().lower()
-            if t and len(t) > 1:
-                techs.add(t)
-
-    # Extract domain-specific phrases from section headers and bold text
-    domains = set()
-    for m in re.finditer(r"\*\*(.*?)\*\*", text):
-        phrase = m.group(1).strip().lower()
-        if len(phrase) > 3 and len(phrase) < 60:
-            domains.add(phrase)
-
-    # Extract company/institution names from work experience headers
-    companies = set()
-    for m in re.finditer(r"###\s+.*?—\s+(.*?)(?:,|\n)", text):
-        companies.add(m.group(1).strip().lower())
-
-    # Tokenize the entire life story for broader matching
-    full_tokens = tokenize(text)
-
-    return {
-        "technologies": techs,
-        "domains": domains,
-        "companies": companies,
-        "full_tokens": full_tokens,
-    }
-
-
 class JobMatcher:
-    """Score and rank jobs against a user profile."""
+    """Score and rank jobs against a user profile using semantic embeddings."""
 
     def __init__(self, profile: dict):
         """
@@ -130,34 +109,96 @@ class JobMatcher:
           - skills: list of skill strings
           - titles: list of desired job title strings
           - keywords: list of important keyword strings
-          - min_salary: int (optional, annual)
           - preferred_locations: list of location strings (optional)
           - remote_preferred: bool (optional)
-          - weights: dict with keys 'skills', 'title', 'keywords', 'location' (optional)
+          - weights: dict with keys 'skills', 'title', 'semantic', 'location' (optional)
         """
         self.profile = profile
         self.weights = profile.get("weights", {
-            "skills": 0.35,
-            "title": 0.25,
-            "keywords": 0.15,
+            "skills": 0.25,
+            "title": 0.20,
+            "semantic": 0.30,
             "location": 0.10,
-            "experience": 0.15,
+            "experience": 0.05,
         })
+        # Ensure semantic weight exists for profiles with old-style weights
+        if "semantic" not in self.weights:
+            # Redistribute from keywords + experience
+            old_kw = self.weights.pop("keywords", 0.15)
+            old_exp = self.weights.get("experience", 0.15)
+            self.weights["semantic"] = old_kw + old_exp * 0.5
+            self.weights["experience"] = old_exp * 0.5
 
-        # Pre-tokenize profile components
+        # Pre-tokenize profile components for token-based matching
         self._skills_tokens = tokenize(" ".join(profile.get("skills", [])))
         self._skills_set = set(self._skills_tokens)
         self._title_tokens = tokenize(" ".join(profile.get("titles", [])))
-        self._keyword_tokens = tokenize(" ".join(profile.get("keywords", [])))
         self._locations = [loc.lower() for loc in profile.get("preferred_locations", [])]
 
-        # Load life-story for deeper matching
+        # Load life-story for experience matching
         life_story_text = load_life_story()
-        self._life_story = extract_life_story_signals(life_story_text)
-        self._life_story_tf = tf(self._life_story["full_tokens"]) if self._life_story["full_tokens"] else {}
+        self._life_story_tokens = tokenize(life_story_text) if life_story_text else []
+        self._life_story_tf = tf(self._life_story_tokens) if self._life_story_tokens else {}
         # Merge life-story technologies into skills set
-        for tech in self._life_story["technologies"]:
-            self._skills_set.update(tokenize(tech))
+        if life_story_text:
+            tech_pattern = re.compile(r"(?:Technologies(?: used)?[:\s]*|Technologies:)(.*?)(?:\n|$)", re.IGNORECASE)
+            for m in tech_pattern.finditer(life_story_text):
+                for t in re.split(r"[,;|.]", m.group(1)):
+                    t = t.strip().lower()
+                    if t and len(t) > 1:
+                        self._skills_set.update(tokenize(t))
+
+        # Build the profile text for semantic embedding
+        self._profile_text = self._build_profile_text(life_story_text)
+        self._profile_embedding = None  # lazy computed
+
+    def _build_profile_text(self, life_story: str) -> str:
+        """Build a rich text representation of the profile for embedding."""
+        parts = []
+
+        titles = self.profile.get("titles", [])
+        if titles:
+            parts.append("Desired roles: " + ", ".join(titles))
+
+        skills = self.profile.get("skills", [])
+        if skills:
+            parts.append("Skills: " + ", ".join(skills))
+
+        keywords = self.profile.get("keywords", [])
+        if keywords:
+            parts.append("Expertise in: " + ", ".join(keywords))
+
+        if life_story:
+            # Use first ~1500 chars of life story for context
+            parts.append("Background: " + life_story[:1500])
+
+        return " ".join(parts)
+
+    def _get_profile_embedding(self):
+        """Compute and cache profile embedding."""
+        if self._profile_embedding is None:
+            model = _get_model()
+            self._profile_embedding = model.encode(self._profile_text, normalize_embeddings=True)
+        return self._profile_embedding
+
+    def _semantic_score(self, job: Job) -> float:
+        """Compute semantic similarity between profile and job using embeddings."""
+        profile_emb = self._get_profile_embedding()
+
+        # Use cached embedding from batch encoding if available
+        if hasattr(job, '_cached_embedding'):
+            job_emb = job._cached_embedding
+        else:
+            model = _get_model()
+            job_text = f"{job.title}. {job.company}. {job.description[:2000]}"
+            job_emb = model.encode(job_text, normalize_embeddings=True)
+
+        # Dot product of normalized vectors = cosine similarity
+        sim = float(profile_emb @ job_emb)
+        # Clamp and rescale: raw cosine similarity for text is usually 0.1-0.7
+        # Rescale to 0-1 range for better discrimination
+        sim = max(0.0, min(1.0, (sim - 0.1) / 0.5))
+        return sim
 
     def score(self, job: Job) -> tuple[float, dict]:
         """
@@ -184,9 +225,8 @@ class JobMatcher:
         profile_title_tf = tf(self._title_tokens)
         title_score = cosine_sim(title_tf, profile_title_tf)
 
-        # 3. Keyword match — cosine similarity of full text
-        profile_kw_tf = tf(self._keyword_tokens + self._skills_tokens)
-        keyword_score = cosine_sim(job_tf, profile_kw_tf)
+        # 3. Semantic similarity — deep embedding-based matching
+        semantic_score = self._semantic_score(job)
 
         # 4. Location match
         location_score = 0.0
@@ -199,14 +239,10 @@ class JobMatcher:
             if self.profile.get("remote_preferred") and "remote" in job_loc:
                 location_score = 1.0
 
-        # 5. Experience match — life-story deep matching
+        # 5. Experience match — life-story TF-IDF (lightweight supplement)
         experience_score = 0.0
         if self._life_story_tf:
             experience_score = cosine_sim(job_tf, self._life_story_tf)
-            # Boost if job mentions domains from life-story
-            for domain in self._life_story["domains"]:
-                if domain in job_text:
-                    experience_score = min(1.0, experience_score + 0.1)
 
         # 6. Recency boost — newer jobs get up to 0.10 bonus
         recency_score = self._recency_score(job)
@@ -214,21 +250,20 @@ class JobMatcher:
         # Weighted sum
         w = self.weights
         total = (
-            w["skills"] * skills_score
-            + w["title"] * title_score
-            + w["keywords"] * keyword_score
-            + w["location"] * location_score
-            + w.get("experience", 0.15) * experience_score
+            w.get("skills", 0.25) * skills_score
+            + w.get("title", 0.20) * title_score
+            + w.get("semantic", 0.30) * semantic_score
+            + w.get("location", 0.10) * location_score
+            + w.get("experience", 0.05) * experience_score
             + 0.10 * recency_score
         )
-        # Normalize back (weights now sum to ~1.1 with recency)
         total = min(total, 1.0)
 
         details = {
             "skills_score": round(skills_score, 3),
             "skills_matched": skills_matched,
             "title_score": round(title_score, 3),
-            "keyword_score": round(keyword_score, 3),
+            "semantic_score": round(semantic_score, 3),
             "location_score": round(location_score, 3),
             "experience_score": round(experience_score, 3),
             "recency_score": round(recency_score, 3),
@@ -242,13 +277,11 @@ class JobMatcher:
         if not job.date_posted:
             return 0.3  # Unknown date gets a small default
         try:
-            # Handle various date formats
             date_str = job.date_posted[:10]
             posted = datetime.fromisoformat(date_str)
             days_ago = (datetime.now() - posted).days
             if days_ago < 0:
                 days_ago = 0
-            # Linear decay: 1.0 for today, 0.0 for 30+ days
             return max(0.0, 1.0 - days_ago / 30.0)
         except (ValueError, TypeError):
             return 0.3
@@ -261,10 +294,27 @@ class JobMatcher:
         if filtered_count > 0:
             logger.info(f"Filtered out {filtered_count} non-AI jobs")
 
+        # Batch encode job texts for efficiency
+        model = _get_model()
+        profile_emb = self._get_profile_embedding()
+
+        # Pre-compute all job embeddings in a batch
+        job_texts = [f"{j.title}. {j.company}. {j.description[:2000]}" for j in ai_jobs]
+        if job_texts:
+            logger.info(f"Computing embeddings for {len(job_texts)} jobs...")
+            job_embeddings = model.encode(job_texts, normalize_embeddings=True,
+                                          batch_size=64, show_progress_bar=len(job_texts) > 50)
+            # Cache embeddings on jobs for the scoring step
+            for job, emb in zip(ai_jobs, job_embeddings):
+                job._cached_embedding = emb
+
         for job in ai_jobs:
             score, details = self.score(job)
             job.match_score = score
             job.match_details = details
+            # Clean up cached embedding
+            if hasattr(job, '_cached_embedding'):
+                del job._cached_embedding
 
         # Sort by score first, then by date (newer first) as tiebreaker
         ranked = sorted(ai_jobs, key=lambda j: (j.match_score, str(j.date_posted or "")), reverse=True)

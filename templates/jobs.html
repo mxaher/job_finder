@@ -27,14 +27,9 @@
         </select>
     </div>
     <div>
-        <label for="min_score">Min Score</label>
-        <select name="min_score" id="min_score">
-            <option value="0" {% if min_score == 0 %}selected{% endif %}>Any</option>
-            <option value="0.2" {% if min_score == 0.2 %}selected{% endif %}>20%+</option>
-            <option value="0.4" {% if min_score == 0.4 %}selected{% endif %}>40%+</option>
-            <option value="0.6" {% if min_score == 0.6 %}selected{% endif %}>60%+</option>
-            <option value="0.7" {% if min_score == 0.7 %}selected{% endif %}>70%+</option>
-        </select>
+        <label for="min_score">Min Score (%)</label>
+        <input type="number" name="min_score" id="min_score" value="{{ "%.0f"|format(min_score * 100) }}"
+               min="0" max="100" step="5" placeholder="0" style="width:5rem">
     </div>
     <div>
         <label for="sort">Sort</label>

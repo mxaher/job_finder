@@ -50,8 +50,8 @@
                 <div class="label">Title</div>
             </div>
             <div class="stat-card">
-                <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.keyword_score or 0) * 100) }}%</div>
-                <div class="label">Keywords</div>
+                <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.semantic_score or 0) * 100) }}%</div>
+                <div class="label">Semantic</div>
             </div>
             <div class="stat-card">
                 <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.experience_score or 0) * 100) }}%</div>
