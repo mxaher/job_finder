@@ -115,9 +115,8 @@ class JobMatcher:
         """
         self.profile = profile
         self.weights = profile.get("weights", {
-            "skills": 0.25,
             "title": 0.20,
-            "semantic": 0.30,
+            "semantic": 0.55,
             "location": 0.10,
             "experience": 0.05,
         })
@@ -130,8 +129,6 @@ class JobMatcher:
             self.weights["experience"] = old_exp * 0.5
 
         # Pre-tokenize profile components for token-based matching
-        self._skills_tokens = tokenize(" ".join(profile.get("skills", [])))
-        self._skills_set = set(self._skills_tokens)
         self._title_tokens = tokenize(" ".join(profile.get("titles", [])))
         self._locations = [loc.lower() for loc in profile.get("preferred_locations", [])]
 
@@ -139,15 +136,6 @@ class JobMatcher:
         life_story_text = load_life_story()
         self._life_story_tokens = tokenize(life_story_text) if life_story_text else []
         self._life_story_tf = tf(self._life_story_tokens) if self._life_story_tokens else {}
-        # Merge life-story technologies into skills set
-        if life_story_text:
-            tech_pattern = re.compile(r"(?:Technologies(?: used)?[:\s]*|Technologies:)(.*?)(?:\n|$)", re.IGNORECASE)
-            for m in tech_pattern.finditer(life_story_text):
-                for t in re.split(r"[,;|.]", m.group(1)):
-                    t = t.strip().lower()
-                    if t and len(t) > 1:
-                        self._skills_set.update(tokenize(t))
-
         # Build the profile text for semantic embedding
         self._profile_text = self._build_profile_text(life_story_text)
         self._profile_embedding = None  # lazy computed
@@ -208,18 +196,8 @@ class JobMatcher:
         job_text = f"{job.title} {job.description}".lower()
         job_tokens = tokenize(job_text)
         job_tf = tf(job_tokens)
-        job_token_set = set(job_tokens)
 
-        # 1. Skills match — fraction of profile skills found in job
-        if self._skills_set:
-            matched_skills = self._skills_set & job_token_set
-            skills_score = len(matched_skills) / len(self._skills_set)
-            skills_matched = sorted(matched_skills)
-        else:
-            skills_score = 0.0
-            skills_matched = []
-
-        # 2. Title similarity — cosine similarity between desired titles and job title
+        # 1. Title similarity — cosine similarity between desired titles and job title
         title_tokens = tokenize(job.title)
         title_tf = tf(title_tokens)
         profile_title_tf = tf(self._title_tokens)
@@ -247,12 +225,11 @@ class JobMatcher:
         # 6. Recency boost — newer jobs get up to 0.10 bonus
         recency_score = self._recency_score(job)
 
-        # Weighted sum
+        # Weighted sum (semantic-only, no skill token matching)
         w = self.weights
         total = (
-            w.get("skills", 0.25) * skills_score
-            + w.get("title", 0.20) * title_score
-            + w.get("semantic", 0.30) * semantic_score
+            w.get("title", 0.20) * title_score
+            + w.get("semantic", 0.55) * semantic_score
             + w.get("location", 0.10) * location_score
             + w.get("experience", 0.05) * experience_score
             + 0.10 * recency_score
@@ -260,8 +237,6 @@ class JobMatcher:
         total = min(total, 1.0)
 
         details = {
-            "skills_score": round(skills_score, 3),
-            "skills_matched": skills_matched,
             "title_score": round(title_score, 3),
             "semantic_score": round(semantic_score, 3),
             "location_score": round(location_score, 3),

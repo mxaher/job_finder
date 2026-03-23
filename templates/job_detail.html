@@ -72,10 +72,6 @@
         <summary>Match Analysis</summary>
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:0.5rem;margin-top:0.5rem">
             <div class="stat-card">
-                <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.skills_score or 0) * 100) }}%</div>
-                <div class="label">Skills</div>
-            </div>
-            <div class="stat-card">
                 <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.title_score or 0) * 100) }}%</div>
                 <div class="label">Title</div>
             </div>
@@ -91,15 +87,11 @@
                 <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.location_score or 0) * 100) }}%</div>
                 <div class="label">Location</div>
             </div>
+            <div class="stat-card">
+                <div class="value" style="font-size:1.3rem">{{ "%.0f"|format((job.match_details.recency_score or 0) * 100) }}%</div>
+                <div class="label">Recency</div>
+            </div>
         </div>
-        {% if job.match_details.skills_matched %}
-        <p style="margin-top:0.8rem"><strong>Matched Skills:</strong></p>
-        <div class="skills-list">
-            {% for s in job.match_details.skills_matched %}
-            <span class="skill-tag">{{ s }}</span>
-            {% endfor %}
-        </div>
-        {% endif %}
     </details>
     {% endif %}
 
