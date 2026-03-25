@@ -398,6 +398,113 @@ def cmd_answers(args):
     print(format_fill_guide(instructions))
 
 
+# --- Job selectors tried in order when extracting description from a page ---
+_DESC_SELECTORS = [
+    "div[class*='job-description']",
+    "div[id*='job-description']",
+    "div[class*='description']",
+    "div[id*='description']",
+    "section[class*='description']",
+    "div[class*='job-detail']",
+    "div[class*='jobdetail']",
+    "div[class*='job_detail']",
+    "article",
+    "main",
+]
+
+
+def _fetch_job_page(url: str) -> tuple[str, str]:
+    """Fetch a job URL and return (title, description_text)."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"Error fetching URL: {e}")
+        sys.exit(1)
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Title
+    og_title = soup.find("meta", property="og:title")
+    title = (
+        og_title["content"].strip()
+        if og_title and og_title.get("content")
+        else (soup.find("title").get_text(strip=True) if soup.find("title") else url)
+    )
+
+    # Description — try targeted selectors, fall back to <main> or full body
+    desc = ""
+    for sel in _DESC_SELECTORS:
+        el = soup.select_one(sel)
+        if el and len(el.get_text(strip=True)) > 200:
+            desc = el.get_text(separator="\n", strip=True)
+            break
+
+    if not desc:
+        # Last resort: strip nav/header/footer and take body text
+        for tag in soup(["nav", "header", "footer", "script", "style"]):
+            tag.decompose()
+        desc = soup.get_text(separator="\n", strip=True)
+
+    return title, desc[:5000]
+
+
+def cmd_score(args):
+    """Fetch a job URL and compute its similarity score against your profile."""
+    profile = load_profile()
+    matcher = JobMatcher(profile)
+
+    print(f"Fetching: {args.url}")
+    title, desc = _fetch_job_page(args.url)
+
+    if not desc:
+        print("Could not extract job description from the page.")
+        sys.exit(1)
+
+    print(f"Title   : {title}")
+    print(f"Desc    : {len(desc)} chars extracted\n")
+
+    job = Job(
+        title=title,
+        company="",
+        location=args.location or "",
+        url=args.url,
+        description=desc,
+        board=JobBoard.LINKEDIN,
+    )
+
+    score, details = matcher.score(job)
+
+    bar_width = 40
+    filled = int(score * bar_width)
+    bar = "█" * filled + "░" * (bar_width - filled)
+
+    print(f"Match Score : {score:.1%}  [{bar}]")
+    print()
+    print(f"  Title score    : {details.get('title_score', 0):.3f}")
+    print(f"  Skill score    : {details.get('skill_score', 0):.3f}")
+    print(f"  Semantic score : {details.get('semantic_score', 0):.3f}")
+    print(f"  Location score : {details.get('location_score', 0):.3f}")
+    print(f"  Experience     : {details.get('experience_score', 0):.3f}")
+    print(f"  Recency        : {details.get('recency_score', 0):.3f}")
+    print(f"  Weighted total : {details.get('weighted_total', 0):.3f}")
+
+    if args.save:
+        jobs_saved = save_jobs([job])
+        matcher.rank([job])
+        print(f"\nSaved to DB ({jobs_saved} new).")
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI Apply — Automated job application pipeline")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -454,6 +561,13 @@ def main():
     p_answers = subparsers.add_parser("answers", help="Show form answers for a job")
     p_answers.add_argument("--url", required=True, help="Job URL")
     p_answers.set_defaults(func=cmd_answers)
+
+    # score
+    p_score = subparsers.add_parser("score", help="Fetch a job URL and compute similarity score")
+    p_score.add_argument("--url", required=True, help="Job URL to evaluate")
+    p_score.add_argument("--location", default="", help="Job location (optional, affects location score)")
+    p_score.add_argument("--save", action="store_true", help="Also save the job to DB")
+    p_score.set_defaults(func=cmd_score)
 
     args = parser.parse_args()
     args.func(args)

@@ -1,7 +1,14 @@
-"""Local LLM integration via Ollama (Qwen 3.5)."""
+"""Local LLM integration via Ollama.
+
+Model recommendations by hardware:
+  - NVIDIA GPU (CUDA) or Apple Silicon (MPS): qwen3.5:9b  (~5 GB)
+  - CPU only:                                 qwen2.5:3b  (~2 GB, runs on 8 GB RAM)
+"""
 
 import json
 import logging
+import platform
+import subprocess
 import time
 from typing import Optional, Dict, Any
 
@@ -11,6 +18,42 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_BASE = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3.5:9b"
+CPU_MODEL = "qwen2.5:3b"
+
+
+def detect_hardware() -> str:
+    """Return 'cuda', 'mps', or 'cpu'."""
+    # Try torch first (most reliable)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    except ImportError:
+        pass
+    # Fallback: nvidia-smi
+    try:
+        subprocess.run(["nvidia-smi"], capture_output=True, check=True)
+        return "cuda"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    # Apple Silicon
+    if platform.machine() in ("arm64", "aarch64") and platform.system() == "Darwin":
+        return "mps"
+    return "cpu"
+
+
+def recommend_model() -> str:
+    """Return the best Ollama model for the current hardware."""
+    hw = detect_hardware()
+    if hw in ("cuda", "mps"):
+        logger.info(f"Hardware detected: {hw} — using {DEFAULT_MODEL}")
+        return DEFAULT_MODEL
+    else:
+        logger.info(f"Hardware detected: cpu — using lighter model {CPU_MODEL}")
+        return CPU_MODEL
 
 
 def check_ollama_available() -> bool:

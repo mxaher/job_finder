@@ -121,7 +121,7 @@ class LinkedInPostsScraper:
     get_job_details() fetches each post URL to extract real date + full text.
     """
 
-    def scrape(self, query: SearchQuery, max_results: int = 20) -> list[Job]:
+    def scrape(self, query: SearchQuery, max_results: int = 40) -> list[Job]:
         try:
             from ddgs import DDGS
         except ImportError:
@@ -137,7 +137,8 @@ class LinkedInPostsScraper:
 
         jobs: list[Job] = []
         try:
-            results = DDGS().text(search_query, max_results=max_results)
+            # timelimit='m' = past month — keeps results recent and filters old indexed posts
+            results = DDGS().text(search_query, max_results=max_results * 3, timelimit='m')
         except Exception as e:
             logger.warning(f"LinkedIn posts search failed: {e}")
             return []
