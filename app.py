@@ -415,36 +415,139 @@ def create_app():
         thread.start()
         return jsonify({"status": "ok", "message": "Generating application in background..."})
 
-    @app.route("/api/add-job", methods=["POST"])
-    def api_add_job():
-        """Manually add a job from any source (Indeed MCP, LinkedIn, etc.)."""
+    def _fetch_and_score(url: str, location: str = "") -> dict:
+        """Fetch a job URL, extract description, score against profile. Returns score dict."""
+        import requests as req
+        from bs4 import BeautifulSoup
+
+        _DESC_SELECTORS = [
+            "div[class*='job-description']", "div[id*='job-description']",
+            "div[class*='description']", "div[id*='description']",
+            "section[class*='description']", "div[class*='job-detail']",
+            "article", "main",
+        ]
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            resp = req.get(url, headers=headers, timeout=20, allow_redirects=True)
+            resp.raise_for_status()
+        except Exception as e:
+            return {"error": f"Could not fetch URL: {e}"}
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Title
+        og_title = soup.find("meta", property="og:title")
+        title = (
+            og_title["content"].strip()
+            if og_title and og_title.get("content")
+            else (soup.find("title").get_text(strip=True) if soup.find("title") else url)
+        )
+
+        # Description
+        desc = ""
+        for sel in _DESC_SELECTORS:
+            el = soup.select_one(sel)
+            if el and len(el.get_text(strip=True)) > 200:
+                desc = el.get_text(separator="\n", strip=True)
+                break
+        if not desc:
+            for tag in soup(["nav", "header", "footer", "script", "style"]):
+                tag.decompose()
+            desc = soup.get_text(separator="\n", strip=True)
+
+        desc = desc[:5000]
+
+        job = Job(
+            title=title, company="", location=location,
+            url=url, board=JobBoard.LINKEDIN, description=desc,
+        )
+        profile = load_profile()
+        matcher = JobMatcher(profile)
+        score, details = matcher.score(job)
+        job.match_score = score
+        job.match_details = details
+
+        return {
+            "title": title,
+            "description_length": len(desc),
+            "match_score": round(score, 3),
+            "details": details,
+            "_job": job,
+        }
+
+    @app.route("/api/score-url", methods=["POST"])
+    def api_score_url():
+        """Fetch a job URL and return its similarity score without saving."""
         data = request.json or {}
         url = data.get("url", "")
         if not url:
             return jsonify({"status": "error", "error": "URL required"})
 
-        title = data.get("title", "Unknown Position")
-        company = data.get("company", "Unknown Company")
-        location = data.get("location", "")
-        description = data.get("description", "")
+        result = _fetch_and_score(url, location=data.get("location", ""))
+        if "error" in result:
+            return jsonify({"status": "error", "error": result["error"]})
 
-        job = Job(
-            title=title, company=company, location=location,
-            url=url, board=JobBoard.INDEED,  # Default board for manual entries
-            description=description,
-        )
+        return jsonify({
+            "status": "ok",
+            "title": result["title"],
+            "description_length": result["description_length"],
+            "match_score": result["match_score"],
+            "details": result["details"],
+        })
 
-        # Score the job
-        profile = load_profile()
-        matcher = JobMatcher(profile)
-        ranked = matcher.rank([job])
-        n_saved = save_jobs(ranked)
+    @app.route("/api/add-job", methods=["POST"])
+    def api_add_job():
+        """Manually add a job. If only URL is provided, auto-fetches the page."""
+        data = request.json or {}
+        url = data.get("url", "")
+        if not url:
+            return jsonify({"status": "error", "error": "URL required"})
 
-        score = ranked[0].match_score if ranked else 0
+        description = data.get("description", "").strip()
+
+        if not description:
+            # Auto-fetch mode: pull page and extract info
+            result = _fetch_and_score(url, location=data.get("location", ""))
+            if "error" in result:
+                return jsonify({"status": "error", "error": result["error"]})
+            job = result["_job"]
+            # Override title/company if caller provided them
+            if data.get("title"):
+                job.title = data["title"]
+            if data.get("company"):
+                job.company = data["company"]
+            if data.get("location"):
+                job.location = data["location"]
+        else:
+            title = data.get("title", "Unknown Position")
+            company = data.get("company", "Unknown Company")
+            location = data.get("location", "")
+            job = Job(
+                title=title, company=company, location=location,
+                url=url, board=JobBoard.LINKEDIN, description=description,
+            )
+            profile = load_profile()
+            matcher = JobMatcher(profile)
+            matcher.score(job)
+            ranked = matcher.rank([job])
+            job = ranked[0] if ranked else job
+
+        n_saved = save_jobs([job])
+        score = job.match_score or 0
+        details = job.match_details or {}
+
         return jsonify({
             "status": "ok",
             "saved": n_saved,
-            "match_score": score,
+            "title": job.title,
+            "match_score": round(score, 3),
+            "details": details,
             "message": f"Job added with {score:.0%} match score",
         })
 

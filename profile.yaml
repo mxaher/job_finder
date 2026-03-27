@@ -191,14 +191,12 @@ preferred_locations:
 
 remote_preferred: true
 
-# --- Preferred Seniority ---
-seniority_level: mid
-
-# --- Scoring Weights ---
+# --- Scoring Weights (must sum to ~0.90, recency adds +0.10 on top) ---
 weights:
   skills: 0.20
   title: 0.20
-  semantic: 0.55      # LLM embedding similarity (primary matching signal)
+  skills: 0.25        # Skill keyword overlap (hard filter against physics/unrelated jobs)
+  semantic: 0.30      # Embedding similarity (broad relevance, reduced to avoid false positives)
   location: 0.10
   experience: 0.05    # life-story TF-IDF (lightweight supplement)
   seniority: 0.15     # penalize jobs that require higher seniority than preferred
@@ -211,5 +209,5 @@ pipeline:
   email_recipient: "ahmed.tawfik96@gmail.com"
   email_digest_interval_days: 2  # Send digest every N days
   cv_dir: "~/CV"
-  ollama_model: "qwen3.5:9b"   # Local LLM for text generation
+  ollama_model: "qwen3.5:9b"
   # gmail_app_password loaded from GMAIL_APP_PASSWORD in .env

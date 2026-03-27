@@ -182,19 +182,18 @@
 
         async function addManualJob() {
             const url = document.getElementById('manual-url').value.trim();
-            const title = document.getElementById('manual-title').value.trim();
-            const company = document.getElementById('manual-company').value.trim();
-            const location = document.getElementById('manual-location').value.trim();
+            const location = document.getElementById('manual-location') ?
+                document.getElementById('manual-location').value.trim() : '';
             if (!url) { alert('URL is required'); return; }
             try {
                 const resp = await fetch('/api/add-job', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({url, title, company, location}),
+                    body: JSON.stringify({url, location}),
                 });
                 const data = await resp.json();
                 if (data.status === 'ok') {
-                    alert('Job added!');
+                    alert(`Added: "${data.title}"\nMatch score: ${(data.match_score * 100).toFixed(0)}%\n\nOpen the Pipeline page for a full score breakdown.`);
                     window.location.reload();
                 } else {
                     alert('Error: ' + (data.error || data.message));
